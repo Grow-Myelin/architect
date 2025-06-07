@@ -1,0 +1,62 @@
+[Unit]
+Description=Arch Linux MCP Server
+After=network.target
+Requires=dbus.service
+Documentation=https://github.com/mcp-arch-linux/docs
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/mcp-arch-server
+Restart=always
+RestartSec=10
+
+# User/Group
+User=mcp-server
+Group=mcp-server
+DynamicUser=yes
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RemoveIPC=yes
+
+# Required capabilities
+AmbientCapabilities=CAP_DAC_OVERRIDE CAP_SYS_ADMIN CAP_NET_ADMIN CAP_SYS_CHROOT
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_SYS_ADMIN CAP_NET_ADMIN CAP_SYS_CHROOT
+
+# Resource limits
+LimitNOFILE=65536
+MemoryMax=2G
+CPUQuota=200%
+TasksMax=512
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mcp-arch-linux
+
+# Environment
+Environment="MCP_BIND_ADDRESS=127.0.0.1:8080"
+Environment="MCP_MAX_CONCURRENT_OPS=10"
+Environment="MCP_REQUIRE_AUTH=true"
+Environment="MCP_AUDIT_LOG_PATH=/var/log/mcp-arch-linux/audit.log"
+Environment="MCP_SNAPSHOTS_DIR=/var/lib/mcp-arch-linux/snapshots"
+Environment="MCP_CAPTURE_DIR=/var/lib/mcp-arch-linux/captures"
+
+# Paths
+ReadWritePaths=/var/log/mcp-arch-linux /var/lib/mcp-arch-linux /tmp/mcp-captures
+ReadOnlyPaths=/etc /usr
+
+[Install]
+WantedBy=multi-user.target

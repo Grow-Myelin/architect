@@ -1,0 +1,84 @@
+[package]
+name = "mcp-arch-linux"
+version = "0.1.0"
+edition = "2021"
+authors = ["MCP Arch Linux Contributors"]
+license = "MIT"
+description = "MCP server for Arch Linux system control with Hyprland integration"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.42", features = ["full"] }
+async-trait = "0.1"
+
+# JSON-RPC and serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+jsonrpc-v2 = { version = "0.13", default-features = false, features = ["bytes-v1", "macros"] }
+
+# Error handling
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# System integration
+nix = { version = "0.29", features = ["fs", "process", "user"] }
+caps = "0.5"
+libc = "0.2"
+
+# D-Bus for systemd
+tokio-dbus = "0.7"
+
+# Process management
+tokio-process = "0.2"
+command-group = "5.0"
+
+# Configuration
+config = "0.14"
+dotenv = "0.15"
+
+# Security
+ring = "0.17"
+base64 = "0.22"
+
+# HTTP/WebSocket (for potential web interface)
+axum = { version = "0.7", optional = true }
+tower = { version = "0.5", optional = true }
+
+# Time handling
+chrono = "0.4"
+
+# UUID generation
+uuid = { version = "1.11", features = ["v4", "serde"] }
+
+# Wayland integration (optional features)
+wayland-client = { version = "0.31", optional = true }
+wayland-protocols = { version = "0.32", optional = true }
+
+# PipeWire integration (optional)
+pipewire = { version = "0.8", optional = true }
+ashpd = { version = "0.10", optional = true }
+
+[dev-dependencies]
+tempfile = "3.14"
+mockall = "0.13"
+tokio-test = "0.4"
+
+[features]
+default = ["wayland", "screen-capture"]
+wayland = ["wayland-client", "wayland-protocols"]
+screen-capture = ["pipewire", "ashpd"]
+web-interface = ["axum", "tower"]
+
+[[bin]]
+name = "mcp-arch-server"
+path = "src/main.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+opt-level = 3
