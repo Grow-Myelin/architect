@@ -2,6 +2,7 @@ pub mod server;
 pub mod protocol;
 pub mod tools;
 pub mod resources;
+pub mod jsonrpc;
 
 use serde::{Serialize, Deserialize};
 use serde_json::Value;

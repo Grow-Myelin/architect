@@ -63,7 +63,19 @@ if ! command -v cargo &> /dev/null; then
     source "$HOME/.cargo/env"
     export PATH="$HOME/.cargo/bin:$PATH"
 else
-    log_info "Rust already installed"
+    log_info "Rust already installed, updating..."
+    rustup update
+fi
+
+# Ensure we have a recent enough Rust version
+log_info "Checking Rust version..."
+RUST_VERSION=$(rustc --version | cut -d' ' -f2)
+log_info "Current Rust version: $RUST_VERSION"
+
+# Update Rust if version is too old
+if rustc --version | grep -q "1\.[0-7][0-9]\."; then
+    log_warn "Rust version may be too old, updating..."
+    rustup update
 fi
 
 # Install Hyprland and related tools (optional)
@@ -87,7 +99,15 @@ if [ ! -f "Cargo.toml" ]; then
     exit 1
 fi
 
-cargo build --release
+log_info "This may take a few minutes for the first build..."
+if ! cargo build --release; then
+    log_error "Build failed! Please check the error messages above."
+    log_info "You may need to update your Rust installation:"
+    log_info "  rustup update"
+    exit 1
+fi
+
+log_info "Build successful!"
 
 # Step 3: Install the server
 log_info "Installing MCP server..."

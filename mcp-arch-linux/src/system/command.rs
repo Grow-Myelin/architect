@@ -5,7 +5,7 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio::time::timeout;
 use tracing::{info, warn, error, debug};
-use command_group::AsyncCommandGroup;
+use command_group::{AsyncCommandGroup, AsyncGroupChild};
 
 pub struct CommandExecutor {
     timeout_duration: Duration,
@@ -29,7 +29,7 @@ impl CommandExecutor {
             .stderr(Stdio::piped())
             .kill_on_drop(true);
         
-        let mut child = command.group_spawn()
+        let mut child: AsyncGroupChild = command.group_spawn()
             .map_err(|e| MCPError::SystemCommand(format!("Failed to spawn command: {}", e)))?;
         
         // Execute with timeout

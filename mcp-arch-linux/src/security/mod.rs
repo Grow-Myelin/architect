@@ -199,10 +199,14 @@ impl RollbackManager {
                 let content = tokio::fs::read_to_string(file_path).await?;
                 let metadata = tokio::fs::metadata(file_path).await?;
                 
+                // Get permissions using nix
+                use nix::sys::stat;
+                let stat = stat::stat(file_path).map_err(|e| MCPError::Other(anyhow::anyhow!("Failed to get file stats: {}", e)))?;
+                
                 files_backup.push(FileBackup {
                     path: file_path.to_string(),
                     content,
-                    permissions: metadata.permissions().mode(),
+                    permissions: stat.st_mode,
                 });
             }
         }
@@ -241,10 +245,14 @@ impl RollbackManager {
             info!("Restoring file: {}", file_backup.path);
             tokio::fs::write(&file_backup.path, &file_backup.content).await?;
             
-            // Restore permissions
-            use std::os::unix::fs::PermissionsExt;
-            let permissions = std::fs::Permissions::from_mode(file_backup.permissions);
-            tokio::fs::set_permissions(&file_backup.path, permissions).await?;
+            // Restore permissions (using nix for cross-platform compatibility)
+            use nix::sys::stat::Mode;
+            use nix::unistd::fchmod;
+            use std::os::unix::io::AsRawFd;
+            
+            let file = std::fs::File::open(&file_backup.path)?;
+            let mode = Mode::from_bits_truncate(file_backup.permissions);
+            fchmod(file.as_raw_fd(), mode).map_err(|e| MCPError::Other(anyhow::anyhow!("Failed to restore permissions: {}", e)))?;
         }
         
         // Restore service states

@@ -14,7 +14,6 @@ async-trait = "0.1"
 # JSON-RPC and serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-jsonrpc-v2 = { version = "0.13", default-features = false, features = ["bytes-v1", "macros"] }
 
 # Error handling
 thiserror = "1.0"
@@ -25,16 +24,15 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # System integration
-nix = { version = "0.29", features = ["fs", "process", "user"] }
+nix = { version = "0.28", features = ["fs", "process", "user"] }
 caps = "0.5"
 libc = "0.2"
 
 # D-Bus for systemd
-tokio-dbus = "0.7"
+zbus = { version = "4", default-features = false, features = ["tokio"] }
 
 # Process management
-tokio-process = "0.2"
-command-group = "5.0"
+command-group = { version = "5.0", features = ["with-tokio"] }
 
 # Configuration
 config = "0.14"
@@ -49,7 +47,7 @@ axum = { version = "0.7", optional = true }
 tower = { version = "0.5", optional = true }
 
 # Time handling
-chrono = "0.4"
+chrono = { version = "0.4", features = ["serde"] }
 
 # UUID generation
 uuid = { version = "1.11", features = ["v4", "serde"] }
@@ -60,7 +58,7 @@ wayland-protocols = { version = "0.32", optional = true }
 
 # PipeWire integration (optional)
 pipewire = { version = "0.8", optional = true }
-ashpd = { version = "0.10", optional = true }
+ashpd = { version = "0.11", optional = true }
 
 [dev-dependencies]
 tempfile = "3.14"

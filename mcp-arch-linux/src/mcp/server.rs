@@ -1,16 +1,18 @@
 use super::{Tool, Resource, MCPToolResult, ToolArgs};
+use super::jsonrpc::{JsonRpcServer, JsonRpcHandler, JsonRpcError};
 use crate::{LinuxMCPServer, Result, MCPError};
-use jsonrpc_v2::{Data, Id, Server, Params};
+use async_trait::async_trait;
 use serde::{Serialize, Deserialize};
 use serde_json::{json, Value};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::net::TcpListener;
-use tracing::{info, error, debug};
+use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+use tracing::{info, error, debug, warn};
 
 pub struct MCPJsonRpcServer {
     server: Arc<LinuxMCPServer>,
-    rpc: Server<()>,
+    rpc: JsonRpcServer,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -86,20 +88,172 @@ struct ToolCallParams {
     arguments: Option<Value>,
 }
 
+struct InitializeHandler {
+    server: Arc<LinuxMCPServer>,
+}
+
+#[async_trait]
+impl JsonRpcHandler for InitializeHandler {
+    async fn handle(&self, _method: &str, params: Option<Value>) -> std::result::Result<Value, JsonRpcError> {
+        let params: InitializeParams = if let Some(p) = params {
+            serde_json::from_value(p).map_err(|_| JsonRpcError::invalid_params())?
+        } else {
+            return Err(JsonRpcError::invalid_params());
+        };
+        
+        info!("Client initialized: {} v{}", params.client_info.name, params.client_info.version);
+        
+        let result = InitializeResult {
+            protocol_version: "2024-11-05".to_string(),
+            capabilities: ServerCapabilities {
+                tools: ToolsCapability { list_changed: true },
+                resources: ResourcesCapability { 
+                    subscribe: true,
+                    list_changed: true,
+                },
+                prompts: PromptsCapability { list_changed: true },
+            },
+            server_info: ServerInfo {
+                name: "mcp-arch-linux".to_string(),
+                version: env!("CARGO_PKG_VERSION").to_string(),
+            },
+        };
+        
+        Ok(serde_json::to_value(result).unwrap())
+    }
+}
+
+struct InitializedHandler;
+
+#[async_trait]
+impl JsonRpcHandler for InitializedHandler {
+    async fn handle(&self, _method: &str, _params: Option<Value>) -> std::result::Result<Value, JsonRpcError> {
+        info!("Client initialization complete");
+        Ok(json!({}))
+    }
+}
+
+struct ToolsListHandler {
+    server: Arc<LinuxMCPServer>,
+}
+
+#[async_trait]
+impl JsonRpcHandler for ToolsListHandler {
+    async fn handle(&self, _method: &str, _params: Option<Value>) -> std::result::Result<Value, JsonRpcError> {
+        let plugins = self.server.plugins.read().await;
+        let tools = plugins.list_tools().await;
+        Ok(serde_json::to_value(tools).unwrap())
+    }
+}
+
+struct ToolCallHandler {
+    server: Arc<LinuxMCPServer>,
+}
+
+#[async_trait]
+impl JsonRpcHandler for ToolCallHandler {
+    async fn handle(&self, _method: &str, params: Option<Value>) -> std::result::Result<Value, JsonRpcError> {
+        let params: ToolCallParams = if let Some(p) = params {
+            serde_json::from_value(p).map_err(|_| JsonRpcError::invalid_params())?
+        } else {
+            return Err(JsonRpcError::invalid_params());
+        };
+        
+        // Acquire semaphore permit for rate limiting
+        let _permit = self.server.semaphore.acquire().await
+            .map_err(|_| JsonRpcError::internal_error())?;
+        
+        // Create tool args
+        let args = if let Some(arguments) = params.arguments {
+            match arguments {
+                Value::Object(map) => ToolArgs { args: map },
+                _ => return Err(JsonRpcError::invalid_params()),
+            }
+        } else {
+            ToolArgs { args: serde_json::Map::new() }
+        };
+        
+        // Execute tool with security checks
+        let result = self.server.security_manager
+            .execute_with_audit(&params.name, async {
+                let plugins = self.server.plugins.read().await;
+                plugins.execute_tool(&params.name, args).await
+            })
+            .await
+            .map_err(|e| JsonRpcError::new(-32603, e.to_string()))?;
+        
+        Ok(serde_json::to_value(result).unwrap())
+    }
+}
+
+struct ResourcesListHandler {
+    server: Arc<LinuxMCPServer>,
+}
+
+#[async_trait]
+impl JsonRpcHandler for ResourcesListHandler {
+    async fn handle(&self, _method: &str, _params: Option<Value>) -> std::result::Result<Value, JsonRpcError> {
+        let plugins = self.server.plugins.read().await;
+        let resources = plugins.list_resources().await;
+        Ok(serde_json::to_value(resources).unwrap())
+    }
+}
+
+struct ResourceReadHandler {
+    server: Arc<LinuxMCPServer>,
+}
+
+#[async_trait]
+impl JsonRpcHandler for ResourceReadHandler {
+    async fn handle(&self, _method: &str, params: Option<Value>) -> std::result::Result<Value, JsonRpcError> {
+        let uri = params
+            .and_then(|p| p.get("uri"))
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| JsonRpcError::invalid_params())?;
+        
+        let plugins = self.server.plugins.read().await;
+        let content = plugins.read_resource(uri).await
+            .map_err(|e| JsonRpcError::new(-32603, e.to_string()))?;
+        
+        Ok(json!({ "content": content }))
+    }
+}
+
 impl MCPJsonRpcServer {
-    pub fn new(server: LinuxMCPServer) -> Self {
+    pub async fn new(server: LinuxMCPServer) -> Self {
         let server = Arc::new(server);
-        let mut rpc = Server::new();
+        let rpc = JsonRpcServer::new();
         
         // Register MCP protocol methods
-        rpc = rpc
-            .with_method("initialize", Self::handle_initialize)
-            .with_method("initialized", Self::handle_initialized)
-            .with_method("tools/list", Self::handle_tools_list)
-            .with_method("tools/call", Self::handle_tool_call)
-            .with_method("resources/list", Self::handle_resources_list)
-            .with_method("resources/read", Self::handle_resource_read)
-            .with_method("completion/complete", Self::handle_completion);
+        rpc.register_handler(
+            "initialize".to_string(),
+            Box::new(InitializeHandler { server: Arc::clone(&server) })
+        ).await;
+        
+        rpc.register_handler(
+            "initialized".to_string(),
+            Box::new(InitializedHandler)
+        ).await;
+        
+        rpc.register_handler(
+            "tools/list".to_string(),
+            Box::new(ToolsListHandler { server: Arc::clone(&server) })
+        ).await;
+        
+        rpc.register_handler(
+            "tools/call".to_string(),
+            Box::new(ToolCallHandler { server: Arc::clone(&server) })
+        ).await;
+        
+        rpc.register_handler(
+            "resources/list".to_string(),
+            Box::new(ResourcesListHandler { server: Arc::clone(&server) })
+        ).await;
+        
+        rpc.register_handler(
+            "resources/read".to_string(),
+            Box::new(ResourceReadHandler { server: Arc::clone(&server) })
+        ).await;
         
         Self { server, rpc }
     }
@@ -142,128 +296,18 @@ impl MCPJsonRpcServer {
         Ok(())
     }
     
-    async fn handle_connection(&self, mut stream: tokio::net::TcpStream) -> Result<()> {
-        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-        
+    async fn handle_connection(&self, mut stream: TcpStream) -> Result<()> {
         let (read_half, mut write_half) = stream.split();
         let mut reader = BufReader::new(read_half);
         let mut line = String::new();
         
         while reader.read_line(&mut line).await? > 0 {
-            if let Ok(request) = serde_json::from_str(&line) {
-                let response = self.rpc.handle(request).await;
-                let response_str = serde_json::to_string(&response)?;
-                write_half.write_all(response_str.as_bytes()).await?;
-                write_half.write_all(b"\n").await?;
-            }
+            let response = self.rpc.handle_message(&line).await;
+            write_half.write_all(response.as_bytes()).await?;
+            write_half.write_all(b"\n").await?;
             line.clear();
         }
         
         Ok(())
-    }
-    
-    async fn handle_initialize(params: Params<InitializeParams>) -> jsonrpc_v2::Result<InitializeResult> {
-        let params = params.parse()?;
-        
-        info!("Client initialized: {} v{}", params.client_info.name, params.client_info.version);
-        
-        Ok(InitializeResult {
-            protocol_version: "2024-11-05".to_string(),
-            capabilities: ServerCapabilities {
-                tools: ToolsCapability { list_changed: true },
-                resources: ResourcesCapability { 
-                    subscribe: true,
-                    list_changed: true,
-                },
-                prompts: PromptsCapability { list_changed: true },
-            },
-            server_info: ServerInfo {
-                name: "mcp-arch-linux".to_string(),
-                version: env!("CARGO_PKG_VERSION").to_string(),
-            },
-        })
-    }
-    
-    async fn handle_initialized(_params: Params<Value>) -> jsonrpc_v2::Result<()> {
-        info!("Client initialization complete");
-        Ok(())
-    }
-    
-    async fn handle_tools_list(
-        server: Data<Arc<MCPJsonRpcServer>>,
-        _params: Params<Value>,
-    ) -> jsonrpc_v2::Result<Vec<Tool>> {
-        let plugins = server.server.plugins.read().await;
-        let tools = plugins.list_tools().await;
-        Ok(tools)
-    }
-    
-    async fn handle_tool_call(
-        server: Data<Arc<MCPJsonRpcServer>>,
-        params: Params<ToolCallParams>,
-    ) -> jsonrpc_v2::Result<MCPToolResult> {
-        let params = params.parse()?;
-        
-        // Acquire semaphore permit for rate limiting
-        let _permit = server.server.semaphore.acquire().await
-            .map_err(|_| jsonrpc_v2::Error::internal_error())?;
-        
-        // Create tool args
-        let args = if let Some(arguments) = params.arguments {
-            match arguments {
-                Value::Object(map) => ToolArgs { args: map },
-                _ => return Err(jsonrpc_v2::Error::invalid_params("Arguments must be an object")),
-            }
-        } else {
-            ToolArgs { args: serde_json::Map::new() }
-        };
-        
-        // Execute tool with security checks
-        let result = server.server.security_manager
-            .execute_with_audit(&params.name, async {
-                let plugins = server.server.plugins.read().await;
-                plugins.execute_tool(&params.name, args).await
-            })
-            .await
-            .map_err(|e| jsonrpc_v2::Error::new(-32603, e.to_string()))?;
-        
-        Ok(result)
-    }
-    
-    async fn handle_resources_list(
-        server: Data<Arc<MCPJsonRpcServer>>,
-        _params: Params<Value>,
-    ) -> jsonrpc_v2::Result<Vec<Resource>> {
-        let plugins = server.server.plugins.read().await;
-        let resources = plugins.list_resources().await;
-        Ok(resources)
-    }
-    
-    async fn handle_resource_read(
-        server: Data<Arc<MCPJsonRpcServer>>,
-        params: Params<Value>,
-    ) -> jsonrpc_v2::Result<String> {
-        let uri = params.parse::<serde_json::Map<String, Value>>()?
-            .get("uri")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| jsonrpc_v2::Error::invalid_params("Missing uri parameter"))?;
-        
-        let plugins = server.server.plugins.read().await;
-        let content = plugins.read_resource(uri).await
-            .map_err(|e| jsonrpc_v2::Error::new(-32603, e.to_string()))?;
-        
-        Ok(content)
-    }
-    
-    async fn handle_completion(
-        _server: Data<Arc<MCPJsonRpcServer>>,
-        params: Params<Value>,
-    ) -> jsonrpc_v2::Result<Value> {
-        // For now, return empty completions
-        Ok(json!({
-            "completion": {
-                "values": []
-            }
-        }))
     }
 }

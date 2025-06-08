@@ -35,7 +35,7 @@ async fn main() -> Result<()> {
         .build()?;
     
     // Create JSON-RPC server
-    let jsonrpc_server = MCPJsonRpcServer::new(server);
+    let jsonrpc_server = MCPJsonRpcServer::new(server).await;
     
     // Setup shutdown signal
     let shutdown_signal = async {
