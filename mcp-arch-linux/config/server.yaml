@@ -1,0 +1,81 @@
+# MCP Arch Linux Server Configuration
+
+server:
+  host: "localhost"
+  port: 8080
+  cors:
+    origin: true
+    credentials: true
+
+logging:
+  level: "info"
+  logDir: "/var/log/mcp-arch-linux"
+  maxFiles: "14d"
+  maxSize: "20m"
+
+security:
+  requireAuth: false  # Set to true in production
+  allowedCommands:
+    # Package management
+    - "pacman"
+    - "pacstrap"
+    - "genfstab"
+    
+    # System control
+    - "systemctl"
+    - "mount"
+    - "umount"
+    - "swapon"
+    - "swapoff"
+    
+    # Disk operations
+    - "sgdisk"
+    - "fdisk"
+    - "mkfs.ext4"
+    - "mkfs.fat"
+    - "mkswap"
+    - "wipefs"
+    - "lsblk"
+    - "blkid"
+    
+    # Hyprland
+    - "hyprctl"
+    
+    # Screen capture
+    - "grim"
+    - "wf-recorder"
+    - "slurp"
+    
+    # System utilities
+    - "ps"
+    - "kill"
+    - "hostname"
+    - "uptime"
+    - "free"
+    - "df"
+    - "journalctl"
+    - "which"
+    - "arch-chroot"
+    
+  maxConcurrentOperations: 10
+  commandTimeout: 300000  # 5 minutes
+  auditAll: true
+
+plugins:
+  system:
+    enabled: true
+    snapshotDir: "/var/lib/mcp-arch-linux/snapshots"
+  
+  archInstall:
+    enabled: true
+    allowDiskOperations: true
+  
+  hyprland:
+    enabled: true
+    socketPath: null  # Auto-detect
+  
+  screenCapture:
+    enabled: true
+    captureDir: "/var/lib/mcp-arch-linux/captures"
+    maxFileSize: "50MB"
+    allowRecording: true
